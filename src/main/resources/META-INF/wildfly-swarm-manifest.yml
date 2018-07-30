@@ -1,0 +1,48 @@
+asset: _bootstrap/sandbox-0.0.1-SNAPSHOT.war
+main-class: org.wildfly.swarm.Swarm
+hollow: false
+properties:
+  swarm.uberjar.build.user: michal
+  swarm.app.artifact: sandbox-0.0.1-SNAPSHOT.war
+modules: !!set
+  org.wildfly.swarm.bean.validation: null
+  org.wildfly.swarm.logging: null
+  org.wildfly.swarm.security: null
+  org.wildfly.swarm.io: null
+  org.wildfly.swarm.ee: null
+  org.wildfly.swarm.microprofile.config.fraction: null
+  org.wildfly.swarm.naming: null
+  org.wildfly.swarm.container: null
+  org.wildfly.swarm.transactions: null
+  org.wildfly.swarm.cdi: null
+  org.wildfly.swarm.microprofile.openapi: null
+  org.wildfly.swarm.jaxrs: null
+  org.wildfly.swarm.elytron: null
+  org.wildfly.swarm.request.controller: null
+  org.wildfly.swarm.undertow: null
+  org.wildfly.swarm.cdi.config: null
+bootstrap-artifacts: !!set
+  org.wildfly.swarm:microprofile-config-api:jar:1.2.1: null
+  io.thorntail:jaxrs-cdi:jar:2.0.1.Final-SNAPSHOT: null
+  io.thorntail:bean-validation:jar:2.0.1.Final-SNAPSHOT: null
+  io.thorntail:logging:jar:2.0.1.Final-SNAPSHOT: null
+  org.wildfly.swarm:config-api-runtime:jar:1.1.0.Final: null
+  io.thorntail:security:jar:2.0.1.Final-SNAPSHOT: null
+  io.thorntail:io:jar:2.0.1.Final-SNAPSHOT: null
+  io.thorntail:ee:jar:2.0.1.Final-SNAPSHOT: null
+  io.thorntail:microprofile-config:jar:2.0.1.Final-SNAPSHOT: null
+  io.thorntail:naming:jar:2.0.1.Final-SNAPSHOT: null
+  io.thorntail:container:jar:2.0.1.Final-SNAPSHOT: null
+  io.thorntail:transactions:jar:2.0.1.Final-SNAPSHOT: null
+  io.thorntail:cdi:jar:2.0.1.Final-SNAPSHOT: null
+  io.thorntail:config-api-runtime:jar:1.4.0: null
+  io.thorntail:microprofile-openapi:jar:2.0.1.Final-SNAPSHOT: null
+  io.thorntail:config-api:jar:1.4.0: null
+  io.thorntail:jaxrs:jar:2.0.1.Final-SNAPSHOT: null
+  io.thorntail:elytron:jar:2.0.1.Final-SNAPSHOT: null
+  io.thorntail:request-controller:jar:2.0.1.Final-SNAPSHOT: null
+  io.thorntail:undertow:jar:2.0.1.Final-SNAPSHOT: null
+  io.thorntail:cdi-config:jar:2.0.1.Final-SNAPSHOT: null
+bundle-dependencies: true
+dependencies: !!set {
+  }
