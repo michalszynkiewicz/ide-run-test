@@ -1,25 +1,44 @@
 package sandbox;
 
+import com.sun.nio.zipfs.ZipFileSystem;
+import org.w3c.dom.Document;
 import org.wildfly.swarm.spi.meta.SimpleLogger;
 import org.wildfly.swarm.tools.ArtifactResolvingHelper;
 import org.wildfly.swarm.tools.ArtifactSpec;
 import org.wildfly.swarm.tools.BuildTool;
 import org.wildfly.swarm.tools.DeclaredDependencies;
 
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.xpath.XPath;
+import javax.xml.xpath.XPathConstants;
+import javax.xml.xpath.XPathExpression;
+import javax.xml.xpath.XPathFactory;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 import java.net.URL;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+
+import static java.util.Arrays.asList;
 
 /**
  * mstodo: Header
@@ -30,14 +49,33 @@ import java.util.stream.Stream;
  */
 public class FatJarBuilder {
 
-    public static final Stream<ArtifactSpec> NO_MVN_ARTIFACTS = Stream.empty();
     private final List<URL> classPathUrls;
 
     public FatJarBuilder(List<URL> classPathUrls) {
         this.classPathUrls = classPathUrls;
     }
 
-    public void doBuild() throws IOException {
+    public static File build(List<String> classPathUrls) throws Exception {
+        System.out.println("da loader: " + FatJarBuilder.class.getClassLoader());
+        System.out.println("da thread loader: " + Thread.currentThread().getContextClassLoader());
+        List<URL> urls = new ArrayList<>();
+
+        for (String urlString : classPathUrls) {
+            urls.add(new URL(urlString));
+        }
+
+        FatJarBuilder b = new FatJarBuilder(urls);
+        return b.doBuild();
+    }
+
+    public File doBuild() throws Exception {
+        long start = System.currentTimeMillis();
+        File result = _doBuild();
+        System.out.printf("fat jar built in %d ms\n", System.currentTimeMillis() - start);
+        return result;
+    }
+
+    private File _doBuild() throws Exception {
 //        final Artifact primaryArtifact = this.project.getArtifact();
 //        final String finalName = this.project.getBuild().getFinalName();
         final String type = "war";
@@ -49,8 +87,8 @@ public class FatJarBuilder {
                         "tt-user-app",
                         "0.1-SNAPSHOT",
                         type,
-                        File.createTempFile("primary artifact :O", ".war"),
-                        "whatever.jar") // mstodo
+                        buildWar(),
+                        "whatever.war") // mstodo
 //                .properties(this.properties)
 //                .mainClass(this.mainClass)
 //                .bundleDependencies(this.bundleDependencies)
@@ -120,61 +158,62 @@ public class FatJarBuilder {
         // NOTE: we don't know which props are transitive!!!
 
         tool.declaredDependencies(gatherMavenDependencies());
-           /*
-        this.project.getResources()
-                .forEach(r -> tool.resourceDirectory(r.getDirectory()));
+        // mstodo can any non-file url get here?
+        this.classPathUrls.parallelStream()
+                .filter(url -> !url.toString().matches(".*\\.[^/]*"))
+                .forEach(r -> tool.resourceDirectory(r.getFile()));
 
-        Path uberjarResourcesDir = null;
-        if (this.uberjarResources == null) {
-            uberjarResourcesDir = Paths.get(this.project.getBasedir().toString()).resolve("src").resolve("main").resolve("uberjar");
-        } else {
-            uberjarResourcesDir = Paths.get(this.uberjarResources);
-        }
+        // mstodo replace/remove
+        Path uberjarResourcesDir = File.createTempFile("uberjar-resources-placehodler", "bs").toPath();
         tool.uberjarResourcesDirectory(uberjarResourcesDir);
 
-        this.additionalModules.stream()
-                .map(m -> new File(this.project.getBuild().getOutputDirectory(), m))
-                .filter(File::exists)
-                .map(File::getAbsolutePath)
-                .forEach(tool::additionalModule);
+        String jarFinalName = File.createTempFile("tt-fatjar", ".jar").getAbsolutePath();
+        System.out.println("triggering build");
+        File jar = tool.build(jarFinalName, Paths.get("/tmp")); // mstodo betta dir, not portable!
+        System.out.println("done build " + jar);
+        return jar;
 
+//            if (this.project.getPackaging().equals(WAR)) {
+//            mstodo: create a war with everything that didn't make into the jars above
+//        tool.repackageWar(primaryArtifactFile);
+//            }
+    }
+
+    private File buildWar() {
         try {
-            String jarFinalName;
-            if (this.finalName != null) {
-                jarFinalName = this.finalName;
-            } else {
-                jarFinalName = finalName + "-" + (this.hollow ? HOLLOWJAR_SUFFIX : UBERJAR_SUFFIX);
-            }
-            jarFinalName += JAR_FILE_EXTENSION;
-            File jar = tool.build(jarFinalName, Paths.get(this.projectBuildDir));
-            ArtifactHandler handler = new DefaultArtifactHandler("jar");
-            Artifact swarmJarArtifact = new DefaultArtifact(
-                    "tt",
-                    "tt",
-                    "0.1-SNAPSHOT",
-                    "compile",
-                    "jar",
-                    "tt",
-                    handler
-            );
+            File war = File.createTempFile("tt-war", ".war");
+            try (FileOutputStream fos = new FileOutputStream(war);
+                 ZipOutputStream out = new ZipOutputStream(fos)) {
+                ZipEntry test = new ZipEntry("test");
+                out.putNextEntry(test);
+                out.write("test".getBytes("UTF-8"));
+                out.closeEntry();
 
-            swarmJarArtifact.setFile(jar);
-            this.project.addAttachedArtifact(swarmJarArtifact);
-
-            if (this.project.getPackaging().equals(WAR)) {
-                tool.repackageWar(primaryArtifactFile);
+                return war;
             }
-        } catch (Exception e) {
-            throw new MojoFailureException("Unable to create " + UBERJAR_SUFFIX + JAR_FILE_EXTENSION, e);
-        }     */
+        } catch (IOException e) {
+            throw new RuntimeException("failed to build war", e);
+        }
     }
 
     private ArtifactResolvingHelper mavenArtifactResolvingHelper() {
-        return null;  // TODO: Customise this generated block
+        // all artifacts should have files defined, no need to resolve anything
+        return new ArtifactResolvingHelper() {
+            @Override
+            public ArtifactSpec resolve(ArtifactSpec spec) throws Exception {
+                return spec;
+            }
+
+            @Override
+            public Set<ArtifactSpec> resolveAll(Collection<ArtifactSpec> specs, boolean transitive, boolean defaultExcludes) throws Exception {
+                return new HashSet<>(specs);
+            }
+        };
     }
 
     private DeclaredDependencies gatherMavenDependencies() {
-        List<ArtifactSpec> specs = classPathUrls.parallelStream()
+        System.out.printf("me has loaders: %s and TCCL: %s\n", getClass().getClassLoader(), Thread.currentThread().getContextClassLoader());
+        List<ArtifactSpec> specs = classPathUrls.stream() // mstodo parallelize
                 .flatMap(this::urlToSpec)
                 .collect(Collectors.toList());
 
@@ -194,20 +233,75 @@ public class FatJarBuilder {
 
     private Stream<ArtifactSpec> urlToSpec(URL url) {
         if (!url.toString().endsWith(".jar")) {
-            return NO_MVN_ARTIFACTS;
+            return Stream.empty();
         }
         String zipFile = resolveUrlToFile(url);
-        try (FileSystem fs = FileSystems.newFileSystem(Paths.get(zipFile), null)) {
+        try (FileSystem fs = FileSystems.newFileSystem(Paths.get(zipFile), getClass().getClassLoader())) {
             Path path = fs.getPath("/META-INF/maven");
-            if (path == null) {
-                return NO_MVN_ARTIFACTS;
-            }
+            if (path == null || !Files.exists(path)) {
+                return Stream.empty();
+            }                                                      /*mstodo: switch this to getPathMatcher?*/
+            Optional<Path> maybePomXml = Files.walk(path)
+                    .filter(p -> p.endsWith("pom.xml"))
+                    .findAny();
+            return maybePomXml
+                    .map(pom -> toArtifactSpec(pom, zipFile))
+                    .map(Stream::of)
+                    .orElse(Stream.empty());
 
         } catch (IOException e) {
-            throw new RuntimeException("Failed to parse jar: " + url);
+            throw new RuntimeException("Failed to parse jar: " + url, e);
         }
+    }
 
-        return null;  // TODO: Customise this generated block
+    private ArtifactSpec toArtifactSpec(Path pom, String zipFilePath) {
+        System.out.println("found pom: " + pom + " should return spec from it");
+        try {
+            // mstodo watch out for properties?
+            String groupId = extract(pom, "/project/groupId",
+                    () -> extract(pom, "/project/parent/groupId"));
+            String artifactId = extract(pom, "/project/artifactId");
+            String version = extract(pom, "/project/version",
+                    () -> extract(pom, "/project/parent/version"));
+            String packaging = extract(pom, "/project/packaging", "jar");
+            String classifier = extract(pom, "/project/classifier", (String) null);
+
+            return new ArtifactSpec("compile",
+                    groupId, artifactId, version, packaging, classifier,
+                    new File(zipFilePath));
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to read artifact spec from pom " + pom, e);
+        }
+    }
+
+    private String extract(Path source, String expression, Supplier<String> defaultValueProvider) {
+        String extracted = extract(source, expression);
+
+        return extracted == null || "".equals(extracted)
+                ? defaultValueProvider.get()
+                : extracted;
+    }
+
+    private String extract(Path source, String expression, String defaultValue) {
+        String extracted = extract(source, expression);
+
+        return extracted == null || "".equals(extracted)
+                ? defaultValue
+                : extracted;
+    }
+
+    private String extract(Path sourcePath, String expression) {   // mstodo simplify, make the extract great again
+        try (InputStream source = Files.newInputStream(sourcePath)) {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            Document doc = builder.parse(source);
+            XPathFactory xPathfactory = XPathFactory.newInstance();
+            XPath xpath = xPathfactory.newXPath();
+            XPathExpression expr = xpath.compile(expression);
+            return (String) expr.evaluate(doc, XPathConstants.STRING);
+        } catch (Exception any) {
+            throw new RuntimeException("Failure when trying to find a match for " + expression, any);
+        }
     }
 
     private String resolveUrlToFile(URL url) {
