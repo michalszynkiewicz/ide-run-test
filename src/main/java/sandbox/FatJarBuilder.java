@@ -1,6 +1,5 @@
 package sandbox;
 
-import com.sun.nio.zipfs.ZipFileSystem;
 import org.w3c.dom.Document;
 import org.wildfly.swarm.spi.meta.SimpleLogger;
 import org.wildfly.swarm.tools.ArtifactResolvingHelper;
@@ -18,8 +17,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URI;
 import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
@@ -30,18 +29,21 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
+import java.util.logging.LogManager;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
-import static java.util.Arrays.asList;
+import static java.util.stream.Collectors.toList;
 
 /**
  * mstodo: Header
+ * mstodo: try on license dictionary
  *
  * @author Michal Szynkiewicz, michal.l.szynkiewicz@gmail.com
  * <br>
@@ -50,21 +52,35 @@ import static java.util.Arrays.asList;
 public class FatJarBuilder {
 
     private final List<URL> classPathUrls;
+    private final File target;
 
-    public FatJarBuilder(List<URL> classPathUrls) {
+    public FatJarBuilder(List<URL> classPathUrls, File target) {
         this.classPathUrls = classPathUrls;
+        this.target = target;
     }
 
-    public static File build(List<String> classPathUrls) throws Exception {
-        System.out.println("da loader: " + FatJarBuilder.class.getClassLoader());
-        System.out.println("da thread loader: " + Thread.currentThread().getContextClassLoader());
+    public static void main(String[] args) throws Exception {
+        File fatJar = new File(args[0]);
+
+        URLClassLoader urlLoader = (URLClassLoader) ClassLoader.getSystemClassLoader();
+
+        List<String> urlList =
+                Stream.of(urlLoader.getURLs())
+                        .map(URL::toString)
+                        .collect(Collectors.toList());
+
+        fatJar = FatJarBuilder.build(urlList, fatJar);
+
+    }
+
+    private static File build(List<String> classPathUrls, File target) throws Exception {
         List<URL> urls = new ArrayList<>();
 
         for (String urlString : classPathUrls) {
             urls.add(new URL(urlString));
         }
 
-        FatJarBuilder b = new FatJarBuilder(urls);
+        FatJarBuilder b = new FatJarBuilder(urls, target);
         return b.doBuild();
     }
 
@@ -76,24 +92,31 @@ public class FatJarBuilder {
     }
 
     private File _doBuild() throws Exception {
-//        final Artifact primaryArtifact = this.project.getArtifact();
-//        final String finalName = this.project.getBuild().getFinalName();
         final String type = "war";
 
-//        final DeclaredDependencies declaredDependencies = new DeclaredDependencies();
+        // NOTE: we don't know which props are transitive!!!
+        List<ArtifactSpecOrUrl> classPathEntries = analyzeClasspath();
+
+        // non-maven jars are not taken into account above
+        // we need to make sure that none of them are skipped and add to war the ones that were
+        // mstodo
+        List<URL> nonMavenJars = classPathEntries.stream()
+                .map(e -> e.url)
+                .filter(Objects::nonNull)
+                .collect(toList());
+
+        LogManager.getLogManager();
 
         final BuildTool tool = new BuildTool(mavenArtifactResolvingHelper())
                 .projectArtifact("tt",
                         "tt-user-app",
                         "0.1-SNAPSHOT",
                         type,
-                        buildWar(),
+                        buildWar(classPathEntries),
                         "whatever.war") // mstodo
 //                .properties(this.properties)
 //                .mainClass(this.mainClass)
 //                .bundleDependencies(this.bundleDependencies)
-//                .executable(executable)
-//                .executableScript(executableScript)
                 .fractionDetectionMode(BuildTool.FractionDetectionMode.when_missing) // mstodo is this reasonable?
                 .hollow(false)
                 .logger(new SimpleLogger() {
@@ -131,22 +154,6 @@ public class FatJarBuilder {
 
 //        Map<ArtifactSpec, Set<ArtifactSpec>> buckets = createBuckets(this.project.getArtifacts(), this.project.getDependencies());
 
-        // mstodo remove comment: gather direct and transient deps - weird :O
-//        for (ArtifactSpec directDep : buckets.keySet()) {
-//
-//            if (!(directDep.scope.equals("compile") || directDep.scope.equals("runtime"))) {
-//                continue; // ignore anything but compile and runtime
-//            }
-//
-//            Set<ArtifactSpec> transientDeps = buckets.get(directDep);
-//            if (transientDeps.isEmpty()) {
-//                declaredDependencies.add(directDep);
-//            } else {
-//                for (ArtifactSpec transientDep : transientDeps) {
-//                    declaredDependencies.add(directDep, transientDep);
-//                }
-//            }
-//        }
 
         // mstodo:
         // - go through the classpath jars
@@ -154,10 +161,9 @@ public class FatJarBuilder {
         // - run the tool on it
         // - check which jars are missing from the fat jar, add them to war
         // - add classes to war
+        tool.declaredDependencies(declaredDependencies(classPathEntries));
 
-        // NOTE: we don't know which props are transitive!!!
 
-        tool.declaredDependencies(gatherMavenDependencies());
         // mstodo can any non-file url get here?
         this.classPathUrls.parallelStream()
                 .filter(url -> !url.toString().matches(".*\\.[^/]*"))
@@ -167,9 +173,9 @@ public class FatJarBuilder {
         Path uberjarResourcesDir = File.createTempFile("uberjar-resources-placehodler", "bs").toPath();
         tool.uberjarResourcesDirectory(uberjarResourcesDir);
 
-        String jarFinalName = File.createTempFile("tt-fatjar", ".jar").getAbsolutePath();
+//        File jarFile = File.createTempFile("tt-fatjar", ".jar");
         System.out.println("triggering build");
-        File jar = tool.build(jarFinalName, Paths.get("/tmp")); // mstodo betta dir, not portable!
+        File jar = tool.build(target.getName(), target.getParentFile().toPath());
         System.out.println("done build " + jar);
         return jar;
 
@@ -179,22 +185,29 @@ public class FatJarBuilder {
 //            }
     }
 
-    private File buildWar() {
+    /*
+    mstodo: it is to early to add jars here!
+     */
+    /**
+     * builds war with classes inside
+     *
+     * @param classPathEntries class path entries as ArtifactSpec or URLs
+     * @return the war file
+     */
+    private File buildWar(List<ArtifactSpecOrUrl> classPathEntries) {
         try {
-            File war = File.createTempFile("tt-war", ".war");
-            try (FileOutputStream fos = new FileOutputStream(war);
-                 ZipOutputStream out = new ZipOutputStream(fos)) {
-                ZipEntry test = new ZipEntry("test");
-                out.putNextEntry(test);
-                out.write("test".getBytes("UTF-8"));
-                out.closeEntry();
+            List<URL> classesUrls = classPathEntries.stream()
+                    .map(ArtifactSpecOrUrl::url)
+                    .filter(Objects::nonNull)
+                    .filter(url -> url.toString().endsWith("/classes/"))
+                    .collect(Collectors.toList());
 
-                return war;
-            }
+            return WarBuilder.build(classesUrls);
         } catch (IOException e) {
             throw new RuntimeException("failed to build war", e);
         }
     }
+
 
     private ArtifactResolvingHelper mavenArtifactResolvingHelper() {
         // all artifacts should have files defined, no need to resolve anything
@@ -211,12 +224,18 @@ public class FatJarBuilder {
         };
     }
 
-    private DeclaredDependencies gatherMavenDependencies() {
-        System.out.printf("me has loaders: %s and TCCL: %s\n", getClass().getClassLoader(), Thread.currentThread().getContextClassLoader());
-        List<ArtifactSpec> specs = classPathUrls.stream() // mstodo parallelize
-                .flatMap(this::urlToSpec)
-                .collect(Collectors.toList());
+    private List<ArtifactSpecOrUrl> analyzeClasspath() {
+        return classPathUrls.parallelStream()
+                .map(this::urlToSpec)
+                .collect(toList());
+    }
 
+    private DeclaredDependencies declaredDependencies(List<ArtifactSpecOrUrl> specsOrUrls) {
+        List<ArtifactSpec> specs =
+                specsOrUrls.stream()
+                .map(specOrUrl -> specOrUrl.spec)
+                .filter(Objects::nonNull)
+                .collect(toList());
         return new DeclaredDependencies() {
             @Override
             public Collection<ArtifactSpec> getDirectDeps() {
@@ -225,30 +244,28 @@ public class FatJarBuilder {
 
             @Override
             public Collection<ArtifactSpec> getTransientDeps(ArtifactSpec parent) {
-                // mstodo do sth about transitives - we probably don't want to do anything with them
                 return Collections.emptyList();
             }
         };
     }
 
-    private Stream<ArtifactSpec> urlToSpec(URL url) {
+    private ArtifactSpecOrUrl urlToSpec(URL url) {
         if (!url.toString().endsWith(".jar")) {
-            return Stream.empty();
+            return ArtifactSpecOrUrl.url(url);
         }
         String zipFile = resolveUrlToFile(url);
         try (FileSystem fs = FileSystems.newFileSystem(Paths.get(zipFile), getClass().getClassLoader())) {
             Path path = fs.getPath("/META-INF/maven");
             if (path == null || !Files.exists(path)) {
-                return Stream.empty();
+                return ArtifactSpecOrUrl.url(url);
             }                                                      /*mstodo: switch this to getPathMatcher?*/
             Optional<Path> maybePomXml = Files.walk(path)
                     .filter(p -> p.endsWith("pom.xml"))
                     .findAny();
             return maybePomXml
                     .map(pom -> toArtifactSpec(pom, zipFile))
-                    .map(Stream::of)
-                    .orElse(Stream.empty());
-
+                    .map(ArtifactSpecOrUrl::spec)
+                    .orElse(ArtifactSpecOrUrl.url(url));
         } catch (IOException e) {
             throw new RuntimeException("Failed to parse jar: " + url, e);
         }
@@ -318,4 +335,28 @@ public class FatJarBuilder {
     }
 
 
+    public static class ArtifactSpecOrUrl {
+        private final URL url;
+        private final ArtifactSpec spec;
+
+        private ArtifactSpecOrUrl(URL url, ArtifactSpec spec) {
+            this.url = url;
+            this.spec = spec;
+        }
+
+        public URL url() {
+            return url;
+        }
+
+        public ArtifactSpec spec() {
+            return spec;
+        }
+
+        private static ArtifactSpecOrUrl url(URL url) {
+            return new ArtifactSpecOrUrl(url, null);
+        }
+        private static ArtifactSpecOrUrl spec(ArtifactSpec spec) {
+            return new ArtifactSpecOrUrl(null, spec);
+        }
+    }
 }
