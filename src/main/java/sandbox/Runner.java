@@ -1,68 +1,36 @@
 package sandbox;
 
-import org.jboss.modules.Module;
-import org.jboss.modules.ModuleClassLoader;
-import org.jboss.modules.ModuleLoadException;
-import org.wildfly.swarm.bootstrap.logging.BackingLoggerManager;
-import org.wildfly.swarm.bootstrap.logging.BootstrapLogger;
-
 import java.io.File;
+import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
-import java.util.logging.LogManager;
+import java.util.Map;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
+
+import static java.lang.String.format;
+import static java.util.Arrays.asList;
 
 // mstodo test with webapp dir
-// mstodo *move the fat jar to memory
-
-// mstodo: failing with logger again, test with fat jar, last changes were probably on war
 
 public class Runner {
-
-    private static ModuleClassLoader loggingModuleClassLoader;
 
     private Runner() {
     }
 
     public static void main(String[] args) throws Exception {
-        enableJBossLogging();
         URLClassLoader loader = createClassLoader();
         callWithClassloader(loader,
                 "org.wildfly.swarm.bootstrap.Main",
                 "main",
                 new Class<?>[]{String[].class},
                 (Object) args);
-    }
-
-    private static void enableJBossLogging() throws ClassNotFoundException, InstantiationException, IllegalAccessException {
-        System.setProperty("boot.module.loader", "org.wildfly.swarm.bootstrap.modules.BootModuleLoader");
-        try {
-            Module loggingModule = Module.getBootModuleLoader().loadModule("org.wildfly.swarm.logging:runtime");
-
-            ClassLoader originalCl = Thread.currentThread().getContextClassLoader();
-            try {
-                loggingModuleClassLoader = loggingModule.getClassLoader();
-                Thread.currentThread().setContextClassLoader(loggingModuleClassLoader);
-                System.setProperty("java.util.logging.manager", "org.jboss.logmanager.LogManager");
-                System.setProperty("org.jboss.logmanager.configurator", "org.wildfly.swarm.container.runtime.wildfly.LoggingConfigurator");
-                //force logging init
-                LogManager.getLogManager();
-                Class<?> logManagerClass = loggingModuleClassLoader.loadClass("org.wildfly.swarm.container.runtime.logging.JBossLoggingManager");
-                BootstrapLogger.setBackingLoggerManager((BackingLoggerManager) logManagerClass.newInstance());
-
-//                org.apache.commons.logging.LogFactory.getLog(Runner.class).info("initializing apache commons logging");
-//                org.apache.commons.logging.LogFactory.getFactory();
-            } finally {
-                Thread.currentThread().setContextClassLoader(originalCl);
-            }
-        } catch (ModuleLoadException e) {
-            System.err.println("[WARN] logging not available, logging will not be configured");
-            e.printStackTrace();
-        }
     }
 
     private static <T> T callWithClassloader(ClassLoader loader,
@@ -77,19 +45,72 @@ public class Runner {
     }
 
     private static URLClassLoader createClassLoader() throws Exception {
-        System.out.println(Paths.get(".").toAbsolutePath().normalize().toString());
-//        File fatJar;
-//
-//        URLClassLoader urlLoader = (URLClassLoader) ClassLoader.getSystemClassLoader();
-//
-//        List<String> urlList =
-//                Stream.of(urlLoader.getURLs())
-//                        .map(URL::toString)
-//                        .collect(Collectors.toList());
-//
-//        fatJar = FatJarBuilder.build(urlList);
-//        fatJar = new File("/home/michal/job/tmp/thorn-1980/target/sandbox-0.0.1-SNAPSHOT-thorntail.jar");
+        File fatJar = File.createTempFile("t-t", ".jar"); // mstodo better name?
+        buildJar(fatJar);
+        System.out.println("Built " + fatJar.getAbsolutePath());
+
         URL jarUrl = fatJar.toURI().toURL();
-        return new URLClassLoader(new URL[]{jarUrl}, loggingModuleClassLoader); //(ClassLoader) ClassLoader.getSystemClassLoader().getParent());
+        return new URLClassLoader(new URL[]{jarUrl}, null); //(ClassLoader) ClassLoader.getSystemClassLoader().getParent());
+    }
+
+    private static void buildJar(File fatJar) throws IOException, InterruptedException {
+        String classpath = Arrays.stream(((URLClassLoader) Thread.currentThread().getContextClassLoader()).getURLs())
+                .map(URL::getFile)
+                .collect(Collectors.joining(File.pathSeparator));
+
+        List<String> command = buildCommand(fatJar, classpath);
+
+        Process fatJarBuilder = new ProcessBuilder(command)
+                .inheritIO()
+                .start();
+
+
+        int exitCode = fatJarBuilder.waitFor();
+        if (exitCode != 0) {
+            throw new RuntimeException("Failed to generate the uber jar.");
+        }
+    }
+
+    /*
+    builds a command like:
+    /my/path/to/java -cp all:elements:of:classpath -Dall -Dsystem=properties JarBuilderClassName pathToTargetJar
+     */
+    private static List<String> buildCommand(File fatJar, String classpath) {
+        List<String> command = new ArrayList<>(
+                asList(
+                        javaCommand(),
+                        "-cp",
+                        classpath)
+        );
+
+        command.addAll(properties());
+        command.addAll(asList(
+                FatJarBuilder.class.getCanonicalName(),
+                fatJar.getAbsolutePath()
+        ));
+        return command;
+    }
+
+    private static Collection<String> properties() {
+        return System.getProperties()
+                .entrySet()
+                .stream()
+                .map(Runner::propertyToString)
+                .collect(Collectors.toList());
+    }
+
+    private static String propertyToString(Map.Entry<Object, Object> property) {
+        return property.getValue() == null
+                ? format("-D%s", property.getKey())
+                : format("-D%s=%s", property.getKey(), property.getValue());
+    }
+
+    private static String javaCommand() {
+        Path javaBinPath = Paths.get(System.getProperty("java.home"), "bin");
+        File javaExecutable = javaBinPath.resolve("java").toFile();
+        if (!javaExecutable.exists()) {
+            javaExecutable = javaBinPath.resolve("java.exe").toFile();
+        }
+        return javaExecutable.getAbsolutePath();
     }
 }
