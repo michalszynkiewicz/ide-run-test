@@ -42,7 +42,7 @@
 		</dependency>
 		<dependency>
 			<groupId>io.thorntail</groupId>
-			<artifactId>ide-run</artifactId>
+			<artifactId>thorntail-runner</artifactId>
 			<version>${thorntail.version}</version>
 		</dependency>
 
